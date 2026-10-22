@@ -1,0 +1,195 @@
+// fin-toml test suite.
+//
+// Run: finc tests/test_toml.fin -I src -o test_toml && ./test_toml
+// (from the repo root).
+
+import { toml_parse, toml_parse_file, toml_get, toml_get_string, toml_get_int, toml_get_float, toml_get_bool, toml_table_has, toml_table_len, toml_array_len, toml_array_get, toml_encode, toml_kind_name, TomlResult, TomlValue } from toml::fin;
+import { assert_true, assert_false, assert_eq_int, assert_eq_long, assert_eq_string } from testing::std;
+import { equals, len } from strings::std;
+import { number2str_float } from types::std;
+import { write_string } from fs::std;
+import { println_str } from stdio::std;
+
+fun check_str(actual: string, expected: string, msg: string) <noret> {
+    assert_eq_string(actual, expected, msg);
+}
+
+fun check_float(actual: double, expected: string, msg: string) <noret> {
+    // Compare through %g rendering: avoids relying on double == lowering.
+    assert_eq_string(number2str_float(actual), expected, msg);
+}
+
+fun parse_ok(src: string, msg: string) <&TomlValue> {
+    let r <TomlResult> = toml_parse(src);
+    assert_true(r.ok, msg);
+    if (!r.ok) {
+        println_str(r.err.message);
+    }
+    return r.root;
+}
+
+fun parse_bad(src: string, msg: string) <noret> {
+    let r <TomlResult> = toml_parse(src);
+    assert_false(r.ok, msg);
+    assert_true(r.err.line >= 1, msg);
+}
+
+fun main() <noret> {
+    // --- scalars ---
+    let d1 <&TomlValue> = parse_ok("title = \"hello\"\n", "basic string parses");
+    check_str(toml_get_string(d1, "title", "?"), "hello", "string getter");
+    check_str(toml_kind_name(0), "string", "kind name string");
+    check_str(toml_kind_name(5), "table", "kind name table");
+
+    let d2 <&TomlValue> = parse_ok("a = 42\nb = -7\nc = 0xFF\nd = 0o17\ne = 0b101\nf = 1_000_000\n", "ints parse");
+    assert_eq_long(toml_get_int(d2, "a", 0), cast<long>(42), "dec int");
+    assert_eq_long(toml_get_int(d2, "b", 0), cast<long>(-7), "neg int");
+    assert_eq_long(toml_get_int(d2, "c", 0), cast<long>(255), "hex int");
+    assert_eq_long(toml_get_int(d2, "d", 0), cast<long>(15), "oct int");
+    assert_eq_long(toml_get_int(d2, "e", 0), cast<long>(5), "bin int");
+    assert_eq_long(toml_get_int(d2, "f", 0), cast<long>(1000000), "underscored int");
+
+    let d3 <&TomlValue> = parse_ok("a = 3.14\nb = 1e6\nc = -0.5\nd = 5e-3\ne = inf\nf = -inf\ng = nan\n", "floats parse");
+    check_float(toml_get_float(d3, "a", cast<double>(0)), "3.14", "float pi");
+    check_float(toml_get_float(d3, "b", cast<double>(0)), "1e+06", "float exp");
+    check_float(toml_get_float(d3, "c", cast<double>(0)), "-0.5", "neg float");
+    check_float(toml_get_float(d3, "d", cast<double>(0)), "0.005", "small exp float");
+    let ve <&TomlValue> = toml_get(d3, "e");
+    let vg <&TomlValue> = toml_get(d3, "g");
+    assert_eq_int(ve.kind, 2, "inf is float kind");
+    assert_eq_int(vg.kind, 2, "nan is float kind");
+    let enc3 <string> = toml_encode(d3);
+    let d3b <&TomlValue> = parse_ok(enc3, "float doc encodes and re-parses");
+    let d3be <&TomlValue> = toml_get(d3b, "e");
+    let d3bg <&TomlValue> = toml_get(d3b, "g");
+    assert_eq_int(d3be.kind, 2, "inf survives encode round-trip");
+    assert_eq_int(d3bg.kind, 2, "nan survives encode round-trip");
+
+    let d4 <&TomlValue> = parse_ok("a = true\nb = false\n", "bools parse");
+    assert_true(toml_get_bool(d4, "a", false), "true bool");
+    assert_false(toml_get_bool(d4, "b", true), "false bool");
+
+    let d5 <&TomlValue> = parse_ok("a = 1979-05-27\nb = 07:32:00\nc = 1979-05-27T07:32:00Z\nd = 1979-05-27 07:32:00.999-07:30\n", "datetimes parse");
+    let d5a <&TomlValue> = toml_get(d5, "a");
+    let d5b <&TomlValue> = toml_get(d5, "b");
+    let d5c <&TomlValue> = toml_get(d5, "c");
+    let d5d <&TomlValue> = toml_get(d5, "d");
+    assert_eq_int(d5a.kind, 6, "date kind");
+    check_str(toml_get_string(d5, "a", "?"), "1979-05-27", "date raw kept");
+    assert_eq_int(d5b.kind, 6, "time kind");
+    assert_eq_int(d5c.kind, 6, "rfc3339 kind");
+    assert_eq_int(d5d.kind, 6, "offset datetime kind");
+    check_str(toml_get_string(d5, "d", "?"), "1979-05-27 07:32:00.999-07:30", "offset datetime raw kept");
+
+    // --- strings: escapes, literal, multiline ---
+    let d6 <&TomlValue> = parse_ok("a = \"tab\\there\"\nb = 'C:\\\\path'\nc = \"uni\\u0041\"\n", "string forms parse");
+    check_str(toml_get_string(d6, "a", "?"), "tab\there", "tab escape");
+    check_str(toml_get_string(d6, "b", "?"), "C:\\\\path", "literal backslash kept");
+    check_str(toml_get_string(d6, "c", "?"), "uniA", "unicode escape");
+    let d7 <&TomlValue> = parse_ok("a = \"\"\"line1\nline2\"\"\"\n", "multiline basic");
+    check_str(toml_get_string(d7, "a", "?"), "line1\nline2", "multiline content");
+    let d8 <&TomlValue> = parse_ok("a = '''raw\\nkept'''\n", "multiline literal");
+    check_str(toml_get_string(d8, "a", "?"), "raw\\nkept", "literal keeps backslash");
+
+    // --- tables, dotted keys, quoted keys ---
+    let d9 <&TomlValue> = parse_ok("[server]\nhost = \"localhost\"\nport = 8080\n[server.tls]\nenabled = true\n", "sections parse");
+    check_str(toml_get_string(d9, "server.host", "?"), "localhost", "nested table getter");
+    assert_eq_long(toml_get_int(d9, "server.port", 0), cast<long>(8080), "nested int getter");
+    assert_true(toml_get_bool(d9, "server.tls.enabled", false), "deep nested bool");
+    assert_true(toml_table_has(d9, "server"), "table has server");
+    assert_eq_int(toml_table_len(toml_get(d9, "server")), 3, "server has host+port+tls");
+
+    let d10 <&TomlValue> = parse_ok("a.b.c = 1\na.b.d = 2\n", "dotted keys");
+    assert_eq_long(toml_get_int(d10, "a.b.c", 0), cast<long>(1), "dotted c");
+    assert_eq_long(toml_get_int(d10, "a.b.d", 0), cast<long>(2), "dotted d");
+    let d11 <&TomlValue> = parse_ok("\"weird.key\" = 5\n", "quoted key with dot");
+    assert_eq_long(toml_get_int(d11, "\"weird.key\"", 0), cast<long>(5), "quoted path getter");
+
+    // --- arrays ---
+    let d12 <&TomlValue> = parse_ok("a = []\nb = [1, 2, 3]\nc = [\n  \"x\", # comment\n  \"y\",\n]\nd = [[1, 2], [3]]\n", "arrays parse");
+    assert_eq_int(toml_array_len(toml_get(d12, "a")), 0, "empty array");
+    assert_eq_int(toml_array_len(toml_get(d12, "b")), 3, "array len");
+    let b1 <&TomlValue> = toml_array_get(toml_get(d12, "b"), 1);
+    assert_eq_long(b1.i, cast<long>(2), "array elem");
+    assert_eq_int(toml_array_len(toml_get(d12, "c")), 2, "multiline array len");
+    let c0 <&TomlValue> = toml_array_get(toml_get(d12, "c"), 0);
+    check_str(c0.s, "x", "multiline array elem");
+    assert_eq_int(toml_array_len(toml_get(d12, "d")), 2, "nested array len");
+    let d1inner <&TomlValue> = toml_array_get(toml_get(d12, "d"), 1);
+    let d1e <&TomlValue> = toml_array_get(d1inner, 0);
+    assert_eq_long(d1e.i, cast<long>(3), "nested array elem");
+
+    // --- inline tables ---
+    let d13 <&TomlValue> = parse_ok("point = { x = 1, y = 2 }\nname = { first = \"Tom\", last = \"Preston\" }\n", "inline tables parse");
+    assert_eq_long(toml_get_int(d13, "point.x", 0), cast<long>(1), "inline x");
+    assert_eq_long(toml_get_int(d13, "point.y", 0), cast<long>(2), "inline y");
+    check_str(toml_get_string(d13, "name.first", "?"), "Tom", "inline first");
+
+    // --- array of tables ---
+    let d14 <&TomlValue> = parse_ok("[[products]]\nname = \"Hammer\"\nsku = 738594937\n[[products]]\nname = \"Nail\"\nsku = 738594938\n[products.extra]\nnote = \"last element\"\n", "array of tables");
+    let prods <&TomlValue> = toml_get(d14, "products");
+    assert_eq_int(prods.kind, 4, "products is array");
+    assert_eq_int(toml_array_len(prods), 2, "two products");
+    let p0 <&TomlValue> = toml_array_get(prods, 0);
+    let p1 <&TomlValue> = toml_array_get(prods, 1);
+    assert_eq_int(p0.kind, 5, "first elem is a table");
+    check_str(toml_get_string(p0, "name", "?"), "Hammer", "first product name");
+    assert_eq_long(toml_get_int(p1, "sku", 0), cast<long>(738594938), "second product sku");
+    check_str(toml_get_string(p1, "extra.note", "?"), "last element", "header after aot targets last elem");
+
+    // --- comments and whitespace ---
+    let d15 <&TomlValue> = parse_ok("# full comment\n\n  a = 1  # trailing\n\tb\t=\t2\n", "comments and ws");
+    assert_eq_long(toml_get_int(d15, "a", 0), cast<long>(1), "comment line skipped");
+    assert_eq_long(toml_get_int(d15, "b", 0), cast<long>(2), "tabs around equals");
+
+    // --- getters with defaults / wrong types ---
+    assert_eq_long(toml_get_int(d15, "missing", cast<long>(99)), cast<long>(99), "missing int default");
+    check_str(toml_get_string(d15, "missing", "dflt"), "dflt", "missing string default");
+    assert_eq_long(toml_get_int(d15, "a", cast<long>(99)), cast<long>(1), "present int beats default");
+    check_str(toml_get_string(d15, "a", "dflt"), "dflt", "wrong-type string default");
+    assert_true(toml_get(d15, "missing") == null, "missing get is null");
+
+    // --- errors (all must fail, with a line number) ---
+    parse_bad("a = 1\na = 2\n", "duplicate key rejected");
+    parse_bad("[t]\na = 1\n[t]\nb = 2\n", "redefined table rejected");
+    parse_bad("a.b = 1\n[a]\nc = 2\n", "header over dotted table rejected");
+    parse_bad("a = \"unterminated\n", "unterminated string rejected");
+    parse_bad("a = 01\n", "leading-zero int rejected");
+    parse_bad("a = hello\n", "bare word rejected");
+    parse_bad("a = 1 trailing\n", "trailing junk rejected");
+    parse_bad("a = [1, 2\n", "unterminated array rejected");
+    parse_bad("a = { x = 1, x = 2 }\n", "duplicate inline key rejected");
+    parse_bad("a = 1.2.3\n", "double dot float rejected");
+    parse_bad("= 5\n", "missing key rejected");
+    let rerr <TomlResult> = toml_parse("a = 1\nb = \"oops\n");
+    assert_false(rerr.ok, "error result not ok");
+    assert_eq_int(rerr.err.line, 2, "error line reported");
+
+    // --- encode round-trip ---
+    let src <string> = "[server]\nhost = \"localhost\"\nport = 8080\n[server.tls]\nenabled = true\ntags = [\"a\", \"b\"]\n";
+    let d16 <&TomlValue> = parse_ok(src, "round-trip source parses");
+    let enc <string> = toml_encode(d16);
+    let d17 <&TomlValue> = parse_ok(enc, "encoded output re-parses");
+    check_str(toml_get_string(d17, "server.host", "?"), "localhost", "round-trip host");
+    assert_eq_long(toml_get_int(d17, "server.port", 0), cast<long>(8080), "round-trip port");
+    assert_true(toml_get_bool(d17, "server.tls.enabled", false), "round-trip tls");
+    assert_eq_int(toml_array_len(toml_get(d17, "server.tls.tags")), 2, "round-trip tags");
+
+    // --- encode of tricky values ---
+    let d18 <&TomlValue> = parse_ok("s = \"a\\nb\\\"q\\\"\"\nwhen = 1979-05-27T07:32:00Z\n", "tricky encode source");
+    let enc2 <string> = toml_encode(d18);
+    let d19 <&TomlValue> = parse_ok(enc2, "tricky encode re-parses");
+    check_str(toml_get_string(d19, "s", "?"), "a\nb\"q\"", "escaped string round-trips");
+    check_str(toml_get_string(d19, "when", "?"), "1979-05-27T07:32:00Z", "datetime round-trips");
+
+    // --- file parsing ---
+    write_string("/tmp/fin-toml-test.toml", "[app]\nname = \"demo\"\nversion = 3\n");
+    let rf <TomlResult> = toml_parse_file("/tmp/fin-toml-test.toml");
+    assert_true(rf.ok, "file parses");
+    check_str(toml_get_string(rf.root, "app.name", "?"), "demo", "file name");
+    assert_eq_long(toml_get_int(rf.root, "app.version", 0), cast<long>(3), "file version");
+    let rf2 <TomlResult> = toml_parse_file("/tmp/fin-toml-does-not-exist.toml");
+    assert_false(rf2.ok, "missing file fails");
+
+    println_str("ALL TOML TESTS PASSED");
+}

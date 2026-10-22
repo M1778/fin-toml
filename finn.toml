@@ -1,0 +1,13 @@
+[project]
+name = "fin-toml"
+version = "0.1.0"
+envpath = ".finn"
+entrypoint = "toml.fin"
+
+[packages]
+
+[scripts]
+check = "finc src/toml.fin"
+test = "finc tests/test_toml.fin -I src -o test_toml && ./test_toml"
+example-basic = "finc examples/basic.fin -I src -o basic && ./basic"
+example-config = "finc examples/config.fin -I src -o config && ./config"

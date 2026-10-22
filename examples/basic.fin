@@ -1,0 +1,22 @@
+// fin-toml example: parse a config document and read typed values.
+//
+// Run: finc examples/basic.fin -I src -o basic && ./basic
+
+import { toml_parse, toml_get_string, toml_get_int, toml_get_bool, toml_encode, TomlResult } from toml::fin;
+import { println_str, println_int } from stdio::std;
+
+fun main() <noret> {
+    let src <string> = "[server]\nhost = \"localhost\"\nport = 8080\n[server.tls]\nenabled = true\n";
+    let r <TomlResult> = toml_parse(src);
+    if (!r.ok) {
+        println_str("parse failed");
+        return;
+    }
+    println_str(toml_get_string(r.root, "server.host", "?"));
+    println_int(cast<int>(toml_get_int(r.root, "server.port", 0)));
+    if (toml_get_bool(r.root, "server.tls.enabled", false)) {
+        println_str("tls on");
+    }
+    println_str("--- encoded back ---");
+    println_str(toml_encode(r.root));
+}

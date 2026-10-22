@@ -1,0 +1,28 @@
+// fin-toml example: load a config file, read values with defaults, and
+// report a parse error with its line number.
+//
+// Run: finc examples/config.fin -I src -o config && ./config
+// (writes /tmp/fin-toml-demo.toml first, then reads it back).
+
+import { toml_parse_file, toml_get_string, toml_get_int, toml_get_bool, TomlResult } from toml::fin;
+import { write_string } from fs::std;
+import { println_str, println_int } from stdio::std;
+
+fun main() <noret> {
+    write_string("/tmp/fin-toml-demo.toml",
+        "# demo app config\n[app]\nname = \"demo\"\nworkers = 4\n[app.limits]\nmax_connections = 100\n");
+    let r <TomlResult> = toml_parse_file("/tmp/fin-toml-demo.toml");
+    if (!r.ok) {
+        println_str("config parse failed");
+        println_int(r.err.line);
+        println_str(r.err.message);
+        return;
+    }
+    println_str(toml_get_string(r.root, "app.name", "unnamed"));
+    println_int(cast<int>(toml_get_int(r.root, "app.workers", 1)));
+    println_int(cast<int>(toml_get_int(r.root, "app.limits.max_connections", 10)));
+    println_int(cast<int>(toml_get_int(r.root, "app.limits.timeout", 30)));
+    if (!toml_get_bool(r.root, "app.debug", false)) {
+        println_str("debug off (default)");
+    }
+}

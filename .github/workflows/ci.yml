@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # finc is built from source per https://github.com/M1778/Fin/blob/master/INSTALL.md
+      # (needs LLVM 22, Conan 2, C++20). This is slow; keep as one step.
+      - name: Install finc
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/M1778/Fin/master/install.sh -o install.sh
+          FIN_DIR="$HOME/Fin" sh install.sh
+          echo "$HOME/Fin/build" >> "$GITHUB_PATH"
+
+      - name: Frontend check (must pass)
+        run: |
+          finc --version
+          finc src/toml.fin
+          finc tests/test_toml.fin -I src
+          finc examples/basic.fin -I src
+          finc examples/config.fin -I src
+
+      # Multi-file imports lower correctly on finc 0.4.0 (verified locally
+      # 2026-10-21), so the test run gates the build.
+      - name: Build and run tests
+        run: |
+          finc tests/test_toml.fin -I src -o test_toml
+          ./test_toml
+          finc examples/basic.fin -I src -o basic
+          ./basic
+          finc examples/config.fin -I src -o config
+          ./config
